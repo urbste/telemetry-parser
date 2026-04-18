@@ -19,6 +19,12 @@ pub struct GoPro {
     frame_readout_time: Option<f64>,
     has_cori: bool,
     is_raw_gpmf: bool,
+    /// CORI samples: timestamp (ns, relative), quaternion (camera orientation since capture start)
+    pub cori_samples_ns: Vec<(i64, Quaternion<f64>)>,
+    /// IORI samples: timestamp (ns, relative), quaternion (image vs camera body)
+    pub iori_samples_ns: Vec<(i64, Quaternion<f64>)>,
+    /// CORI × IORI product (same length as CORI/IORI when present)
+    pub orientation_combined_ns: Vec<(i64, Quaternion<f64>)>,
 }
 
 impl GoPro {
@@ -35,7 +41,13 @@ impl GoPro {
         self.frame_readout_time
     }
     pub fn normalize_imu_orientation(v: String) -> String {
-        v
+        // GPMF stores ACCL/GYRO/GRAV components in file order Z,X,Y in .x/.y/.z; default "XYZ"
+        // would mis-label them. Remap to physics X,Y,Z via orient("YZX") when the stream
+        // still uses the generic placeholder (HERO6/7 and MTRX provide explicit IMUO).
+        match v.as_str() {
+            "XYZ" => "YZX".to_owned(),
+            _ => v,
+        }
     }
 
     pub fn detect<P: AsRef<std::path::Path>>(buffer: &[u8], _filepath: P, options: &crate::InputOptions) -> Option<Self> {
@@ -264,7 +276,11 @@ impl GoPro {
             }
 
             // Convert MTRX to Orientation tag
-            if g == &GroupId::Gyroscope || g == &GroupId::Accelerometer || g == &GroupId::Magnetometer {
+            if g == &GroupId::Gyroscope
+                || g == &GroupId::Accelerometer
+                || g == &GroupId::Magnetometer
+                || g == &GroupId::GravityVector
+            {
                 let mut imu_orientation = None;
                 if let Some(m) = v.get_t(TagId::Matrix) as Option<&Vec<Vec<f32>>> {
                     if !m.is_empty() && !m[0].is_empty() {
@@ -354,14 +370,43 @@ impl GoPro {
                 }
             }
             if !cori.is_empty() && cori.len() == iori.len() {
-                // Multiply CORI * IORI
-                let quat = cori.into_iter().zip(iori.into_iter()).map(|(c, i)| TimeQuaternion {
-                    t: c.0 as f64 / 1000.0,
-                    v: c.1 * i.1
-                }).collect();
+                self.cori_samples_ns.extend(
+                    cori.iter()
+                        .map(|(ts_us, q)| (*ts_us * 1000, q.clone())),
+                );
+                self.iori_samples_ns.extend(
+                    iori.iter()
+                        .map(|(ts_us, q)| (*ts_us * 1000, q.clone())),
+                );
+                self.orientation_combined_ns.extend(
+                    cori.iter()
+                        .zip(iori.iter())
+                        .map(|(c, i)| (c.0 * 1000, c.1.clone() * i.1.clone())),
+                );
+                // Multiply CORI * IORI (t kept for compatibility: relative time in ms as f64)
+                let quat: Vec<TimeQuaternion<f64>> = cori
+                    .into_iter()
+                    .zip(iori.into_iter())
+                    .map(|(c, i)| TimeQuaternion {
+                        t: c.0 as f64 / 1000.0,
+                        v: c.1 * i.1,
+                    })
+                    .collect();
 
                 let grouped_tag_map = samples[i].tag_map.as_mut().unwrap();
-                util::insert_tag(grouped_tag_map, tag!(parsed GroupId::Quaternion, TagId::Data, "Quaternion data",  Vec_TimeQuaternion_f64, |v| format!("{:?}", v), quat, vec![]), options);
+                util::insert_tag(
+                    grouped_tag_map,
+                    tag!(
+                        parsed GroupId::Quaternion,
+                        TagId::Data,
+                        "Quaternion data",
+                        Vec_TimeQuaternion_f64,
+                        |v| format!("{:?}", v),
+                        quat,
+                        vec![]
+                    ),
+                    options,
+                );
             }
         }
     }

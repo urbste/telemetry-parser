@@ -47,6 +47,34 @@ Details in [bin/python-module](https://github.com/AdrianEddy/telemetry-parser/tr
 3. Build the binary: `cd bin/gyro2bb ; cargo build --release`
 4. Resulting file will be in `target/release/` directory
 
+## Android library (AAR)
+
+Rust JNI + Kotlin live under [`android/`](android/). The Gradle task `buildRustLib` runs **cargo-ndk** before packaging; you do not need to run `cargo ndk` manually when using `./build-android.sh` or `./gradlew :android:assembleRelease`.
+
+**Prerequisites**
+
+- [Rust / rustup](https://rustup.rs/) with Android targets (e.g. `rustup target add aarch64-linux-android`)
+- [cargo-ndk](https://github.com/bbqsrc/cargo-ndk): `cargo install cargo-ndk`
+- Android SDK (platform **android-34**) and NDK **26.3.11579264** (pinned in [`android/build.gradle.kts`](android/build.gradle.kts))
+- Optional but recommended: `export ANDROID_NDK_HOME=$HOME/Android/Sdk/ndk/26.3.11579264` (adjust path to your SDK)
+
+**Commands**
+
+- Default (fast): single ABI **arm64-v8a**, Cargo **release** profile  
+  `./build-android.sh`  
+  Output: `android/build/outputs/aar/telemetry-android-release.aar`
+- Fast iteration (lighter Rust profile `android-dev` from [`Cargo.toml`](Cargo.toml)):  
+  `ABIS=arm64-v8a CARGO_PROFILE=android-dev ./build-android.sh`
+- All common ABIs (slower; matches many emulators + 32-bit):  
+  `ABIS=arm64-v8a,armeabi-v7a,x86_64,x86 ./build-android.sh`
+
+Equivalent Gradle properties: `-PrustAbis=...` and `-PrustProfile=release` or `-PrustProfile=android-dev`.
+
+**Notes**
+
+- `buildRustLib` declares inputs/outputs so Gradle skips Rust when nothing changed (`UP-TO-DATE`).
+- [gradle.properties](gradle.properties) enables parallel builds and build caching. Configuration cache is commented out by default (AGP 8.2 + JDK 21 often hits `JdkImageTransform` issues with it on); you can re-enable when using JDK 17 or a newer AGP.
+
 <br>
 
 #### License

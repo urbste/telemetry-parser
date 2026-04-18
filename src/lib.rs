@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 // Copyright © 2021-2022 Adrian <adrian.eddy at gmail>
 
+#[cfg(target_os = "android")]
+mod android;
+
 mod sony;
 mod gopro;
 mod gyroflow;
@@ -27,6 +30,7 @@ mod nikon;
 pub mod tags_impl;
 pub mod util;
 pub mod filesystem;
+pub mod gpmf_lens;
 
 use std::io::*;
 use std::sync::{ Arc, atomic::AtomicBool };
@@ -177,4 +181,24 @@ impl_formats! {
     Cooke     => cooke::Cooke,
     SenseFlow => senseflow::SenseFlow,
     Freefly   => freefly::Freefly,
+}
+
+impl Input {
+    /// GoPro only: CORI, IORI, and CORI×IORI with timestamps in **nanoseconds** (relative).
+    pub fn gopro_orientation_streams_ns(
+        &self,
+    ) -> Option<(
+        &[(i64, crate::tags_impl::Quaternion<f64>)],
+        &[(i64, crate::tags_impl::Quaternion<f64>)],
+        &[(i64, crate::tags_impl::Quaternion<f64>)],
+    )> {
+        match &self.inner {
+            SupportedFormats::GoPro(g) => Some((
+                g.cori_samples_ns.as_slice(),
+                g.iori_samples_ns.as_slice(),
+                g.orientation_combined_ns.as_slice(),
+            )),
+            _ => None,
+        }
+    }
 }

@@ -184,6 +184,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
+name = "extract-metadata"
+version = "0.1.0"
+dependencies = [
+ "argh",
+ "serde",
+ "serde_json",
+ "telemetry-parser",
+]
+
+[[package]]
 name = "fallible_collections"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -211,6 +221,16 @@ name = "find-msvc-tools"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
+
+[[package]]
+name = "gyro2bb"
+version = "0.3.0"
+dependencies = [
+ "argh",
+ "serde",
+ "serde_json",
+ "telemetry-parser",
+]
 
 [[package]]
 name = "half"

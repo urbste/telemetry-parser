@@ -1,4 +1,19 @@
+# Rust / Cargo
 target/
+
+# Gradle (root + subprojects)
+.gradle/
+build/
+
+# Android / NDK
+local.properties
+.externalNativeBuild/
+.cxx/
+captures/
+*.apk
+*.aab
+*.dex
+
 .vscode/
 dev/
 .env*/

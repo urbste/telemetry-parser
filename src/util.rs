@@ -290,9 +290,40 @@ pub struct IMUData {
     pub timestamp_ms: f64,
     pub gyro: Option<[f64; 3]>,
     pub accl: Option<[f64; 3]>,
-    pub magn: Option<[f64; 3]>
+    pub magn: Option<[f64; 3]>,
+    pub grav: Option<[f64; 3]>,
 }
 
+/// Scale raw IMU values to SI units: gyro rad/s, accel m/s² (same for gravity vector).
+fn imu_unit_scale(group: &GroupId, unit: Option<&str>) -> f64 {
+    match group {
+        GroupId::Gyroscope => match unit {
+            Some("rad/s") | None => 1.0,
+            Some("deg/s") | Some("°/s") => std::f64::consts::PI / 180.0,
+            _ => 1.0,
+        },
+        GroupId::Accelerometer | GroupId::GravityVector => match unit {
+            Some("g") | Some("G") => 9.80665,
+            _ => 1.0,
+        },
+        _ => match unit {
+            Some("g") | Some("G") => 9.80665,
+            _ => 1.0,
+        },
+    }
+}
+
+/// GRAV export component order: `(a,b,c) -> (c,a,b)` after scale/orientation.
+#[inline]
+pub fn gpmf_gravity_vector_export(v: [f64; 3]) -> [f64; 3] {
+    [v[2], v[0], v[1]]
+}
+
+/// CORI/IORI quaternion export: `(w,x,y,z)` as `(a,b,c,d) -> (-b,d,c,a)` for JSON/Android.
+#[inline]
+pub fn gpmf_orientation_quaternion_export(q: &Quaternion<f64>) -> [f64; 4] {
+    [-q.x, q.z, q.y, q.w]
+}
 
 pub fn normalized_imu(input: &crate::Input, orientation: Option<String>) -> Result<Vec<IMUData>> {
     let mut timestamp = 0f64;
@@ -311,7 +342,11 @@ pub fn normalized_imu(input: &crate::Input, orientation: Option<String>) -> Resu
             let grouped_tag_map = info.tag_map.as_ref().unwrap();
 
             for (group, map) in grouped_tag_map {
-                if group == &GroupId::Gyroscope || group == &GroupId::Accelerometer || group == &GroupId::Magnetometer {
+                if group == &GroupId::Gyroscope
+                    || group == &GroupId::Accelerometer
+                    || group == &GroupId::Magnetometer
+                    || group == &GroupId::GravityVector
+                {
                     let raw2unit = crate::try_block!(f64, {
                         match &map.get(&TagId::Scale)?.value {
                             TagValue::i16(v) => *v.get() as f64,
@@ -321,13 +356,8 @@ pub fn normalized_imu(input: &crate::Input, orientation: Option<String>) -> Resu
                         }
                     }).unwrap_or(1.0);
 
-                    let unit2deg = crate::try_block!(f64, {
-                        match (map.get_t(TagId::Unit) as Option<&String>)?.as_str() {
-                            "rad/s" => 180.0 / std::f64::consts::PI, // rad to deg
-                            "g" => 9.80665, // g to m/s²
-                            _ => 1.0
-                        }
-                    }).unwrap_or(1.0);
+                    let unit_str = map.get_t(TagId::Unit) as Option<&String>;
+                    let unit_scale = imu_unit_scale(group, unit_str.map(|s| s.as_str()));
 
                     let mut io = match map.get_t(TagId::Orientation) as Option<&String> {
                         Some(v) if v.len() == 3 => v.clone(),
@@ -353,10 +383,15 @@ pub fn normalized_imu(input: &crate::Input, orientation: Option<String>) -> Resu
                                         final_data[data_index + j].timestamp_ms = timestamp;
                                         timestamp += reading_duration;
                                     }
-                                    let itm = v.clone().into_scaled(&raw2unit, &unit2deg).orient(io);
+                                    let itm = v.clone().into_scaled(&raw2unit, &unit_scale).orient(io);
                                          if group == &GroupId::Gyroscope     { final_data[data_index + j].gyro = Some([ itm.x, itm.y, itm.z ]); }
                                     else if group == &GroupId::Accelerometer { final_data[data_index + j].accl = Some([ itm.x, itm.y, itm.z ]); }
                                     else if group == &GroupId::Magnetometer  { final_data[data_index + j].magn = Some([ itm.x, itm.y, itm.z ]); }
+                                    else if group == &GroupId::GravityVector {
+                                        final_data[data_index + j].grav = Some(gpmf_gravity_vector_export([
+                                            itm.x, itm.y, itm.z,
+                                        ]));
+                                    }
                                 }
                             },
                             // Insta360
@@ -372,10 +407,15 @@ pub fn normalized_imu(input: &crate::Input, orientation: Option<String>) -> Resu
                                             final_data[data_index + j].timestamp_ms -= first_timestamp.unwrap();
                                         }
                                     }
-                                    let itm = v.clone().into_scaled(&raw2unit, &unit2deg).orient(io);
+                                    let itm = v.clone().into_scaled(&raw2unit, &unit_scale).orient(io);
                                          if group == &GroupId::Gyroscope     { final_data[data_index + j].gyro = Some([ itm.x, itm.y, itm.z ]); }
                                     else if group == &GroupId::Accelerometer { final_data[data_index + j].accl = Some([ itm.x, itm.y, itm.z ]); }
                                     else if group == &GroupId::Magnetometer  { final_data[data_index + j].magn = Some([ itm.x, itm.y, itm.z ]); }
+                                    else if group == &GroupId::GravityVector {
+                                        final_data[data_index + j].grav = Some(gpmf_gravity_vector_export([
+                                            itm.x, itm.y, itm.z,
+                                        ]));
+                                    }
                                 }
                             },
                             _ => ()
@@ -416,11 +456,12 @@ pub fn normalized_imu_interpolated(input: &crate::Input, orientation: Option<Str
 
     let accurate_ts = input.has_accurate_timestamps();
 
-    let mut timestamp = (0.0, 0.0, 0.0);
+    let mut timestamp = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
 
     let mut gyro_map = BTreeMap::new();
     let mut accl_map = BTreeMap::new();
     let mut magn_map = BTreeMap::new();
+    let mut grav_map = BTreeMap::new();
 
     let mut gyro_timestamps = BTreeSet::new();
 
@@ -431,9 +472,10 @@ pub fn normalized_imu_interpolated(input: &crate::Input, orientation: Option<Str
                 crate::gopro::GoPro::get_avg_sample_duration(samples, &GroupId::Gyroscope),
                 crate::gopro::GoPro::get_avg_sample_duration(samples, &GroupId::Accelerometer),
                 crate::gopro::GoPro::get_avg_sample_duration(samples, &GroupId::Magnetometer),
+                crate::gopro::GoPro::get_avg_sample_duration(samples, &GroupId::GravityVector),
             )
         } else {
-            let mut total_len = (0, 0, 0);
+            let mut total_len = (0, 0, 0, 0);
             for grouped_tag_map in samples.iter().filter_map(|v| v.tag_map.as_ref()) {
                 for (group, map) in grouped_tag_map {
                     if let Some(taginfo) = map.get(&TagId::Data) {
@@ -442,6 +484,7 @@ pub fn normalized_imu_interpolated(input: &crate::Input, orientation: Option<Str
                                 GroupId::Gyroscope     => total_len.0 += arr.get().len(),
                                 GroupId::Accelerometer => total_len.1 += arr.get().len(),
                                 GroupId::Magnetometer  => total_len.2 += arr.get().len(),
+                                GroupId::GravityVector => total_len.3 += arr.get().len(),
                                 _ => {}
                             }
                         }
@@ -450,6 +493,7 @@ pub fn normalized_imu_interpolated(input: &crate::Input, orientation: Option<Str
                                 GroupId::Gyroscope     => total_len.0 += arr.get().len(),
                                 GroupId::Accelerometer => total_len.1 += arr.get().len(),
                                 GroupId::Magnetometer  => total_len.2 += arr.get().len(),
+                                GroupId::GravityVector => total_len.3 += arr.get().len(),
                                 _ => {}
                             }
                         }
@@ -464,7 +508,8 @@ pub fn normalized_imu_interpolated(input: &crate::Input, orientation: Option<Str
             (
                 if total_len.0 > 0 { Some(total_duration_ms / total_len.0 as f64) } else { None },
                 if total_len.1 > 0 { Some(total_duration_ms / total_len.1 as f64) } else { None },
-                if total_len.2 > 0 { Some(total_duration_ms / total_len.2 as f64) } else { None }
+                if total_len.2 > 0 { Some(total_duration_ms / total_len.2 as f64) } else { None },
+                if total_len.3 > 0 { Some(total_duration_ms / total_len.3 as f64) } else { None },
             )
         };
         log::debug!("Reading duration: {:?}", reading_duration);
@@ -481,6 +526,12 @@ pub fn normalized_imu_interpolated(input: &crate::Input, orientation: Option<Str
                     reading_duration.2 = Some(grd.max(mrd));
                 }
             }
+            if let Some(grvd) = reading_duration.3 {
+                if (grd - grvd).abs() < 0.1 {
+                    reading_duration.0 = Some(grd.max(grvd));
+                    reading_duration.3 = Some(grd.max(grvd));
+                }
+            }
         }
 
         for info in samples {
@@ -489,7 +540,11 @@ pub fn normalized_imu_interpolated(input: &crate::Input, orientation: Option<Str
             let grouped_tag_map = info.tag_map.as_ref().unwrap();
 
             for (group, map) in grouped_tag_map {
-                if group == &GroupId::Gyroscope || group == &GroupId::Accelerometer || group == &GroupId::Magnetometer {
+                if group == &GroupId::Gyroscope
+                    || group == &GroupId::Accelerometer
+                    || group == &GroupId::Magnetometer
+                    || group == &GroupId::GravityVector
+                {
                     let raw2unit = crate::try_block!(f64, {
                         match &map.get(&TagId::Scale)?.value {
                             TagValue::i16(v) => *v.get() as f64,
@@ -499,13 +554,8 @@ pub fn normalized_imu_interpolated(input: &crate::Input, orientation: Option<Str
                         }
                     }).unwrap_or(1.0);
 
-                    let unit2deg = crate::try_block!(f64, {
-                        match (map.get_t(TagId::Unit) as Option<&String>)?.as_str() {
-                            "rad/s" => 180.0 / std::f64::consts::PI, // rad to deg
-                            "g" => 9.80665, // g to m/s²
-                            _ => 1.0
-                        }
-                    }).unwrap_or(1.0);
+                    let unit_str = map.get_t(TagId::Unit) as Option<&String>;
+                    let unit_scale = imu_unit_scale(group, unit_str.map(|s| s.as_str()));
 
                     let mut io = match map.get_t(TagId::Orientation) as Option<&String> {
                         Some(v) if v.len() == 3 => v.clone(),
@@ -524,10 +574,33 @@ pub fn normalized_imu_interpolated(input: &crate::Input, orientation: Option<Str
                                 let arr = arr.get();
 
                                 for v in arr {
-                                    let itm = v.clone().into_scaled(&raw2unit, &unit2deg).orient(io);
-                                         if group == &GroupId::Gyroscope     { let ts = (timestamp.0 * 1000.0f64).round() as i64; gyro_map.insert(ts, itm); timestamp.0 += reading_duration.0.unwrap(); gyro_timestamps.insert(ts); }
-                                    else if group == &GroupId::Accelerometer { let ts = (timestamp.1 * 1000.0f64).round() as i64; accl_map.insert(ts, itm); timestamp.1 += reading_duration.1.unwrap(); }
-                                    else if group == &GroupId::Magnetometer  { let ts = (timestamp.2 * 1000.0f64).round() as i64; magn_map.insert(ts, itm); timestamp.2 += reading_duration.2.unwrap(); }
+                                    let itm = v.clone().into_scaled(&raw2unit, &unit_scale).orient(io);
+                                    if group == &GroupId::Gyroscope {
+                                        let ts = (timestamp.0 * 1000.0f64).round() as i64;
+                                        gyro_map.insert(ts, itm);
+                                        timestamp.0 += reading_duration.0.unwrap();
+                                        gyro_timestamps.insert(ts);
+                                    } else if group == &GroupId::Accelerometer {
+                                        let ts = (timestamp.1 * 1000.0f64).round() as i64;
+                                        accl_map.insert(ts, itm);
+                                        timestamp.1 += reading_duration.1.unwrap();
+                                    } else if group == &GroupId::Magnetometer {
+                                        let ts = (timestamp.2 * 1000.0f64).round() as i64;
+                                        magn_map.insert(ts, itm);
+                                        timestamp.2 += reading_duration.2.unwrap();
+                                    } else if group == &GroupId::GravityVector {
+                                        let ts = (timestamp.3 * 1000.0f64).round() as i64;
+                                        let o = gpmf_gravity_vector_export([itm.x, itm.y, itm.z]);
+                                        grav_map.insert(
+                                            ts,
+                                            Vector3 {
+                                                x: o[0],
+                                                y: o[1],
+                                                z: o[2],
+                                            },
+                                        );
+                                        timestamp.3 += reading_duration.3.unwrap();
+                                    }
                                 }
                             },
                             // Canon
@@ -535,10 +608,33 @@ pub fn normalized_imu_interpolated(input: &crate::Input, orientation: Option<Str
                                 let arr = arr.get();
 
                                 for v in arr {
-                                    let itm = v.clone().into_scaled(&raw2unit, &unit2deg).orient(io);
-                                         if group == &GroupId::Gyroscope     { let ts = (timestamp.0 * 1000.0f64).round() as i64; gyro_map.insert(ts, itm); timestamp.0 += reading_duration.0.unwrap(); gyro_timestamps.insert(ts); }
-                                    else if group == &GroupId::Accelerometer { let ts = (timestamp.1 * 1000.0f64).round() as i64; accl_map.insert(ts, itm); timestamp.1 += reading_duration.1.unwrap(); }
-                                    else if group == &GroupId::Magnetometer  { let ts = (timestamp.2 * 1000.0f64).round() as i64; magn_map.insert(ts, itm); timestamp.2 += reading_duration.2.unwrap(); }
+                                    let itm = v.clone().into_scaled(&raw2unit, &unit_scale).orient(io);
+                                    if group == &GroupId::Gyroscope {
+                                        let ts = (timestamp.0 * 1000.0f64).round() as i64;
+                                        gyro_map.insert(ts, itm);
+                                        timestamp.0 += reading_duration.0.unwrap();
+                                        gyro_timestamps.insert(ts);
+                                    } else if group == &GroupId::Accelerometer {
+                                        let ts = (timestamp.1 * 1000.0f64).round() as i64;
+                                        accl_map.insert(ts, itm);
+                                        timestamp.1 += reading_duration.1.unwrap();
+                                    } else if group == &GroupId::Magnetometer {
+                                        let ts = (timestamp.2 * 1000.0f64).round() as i64;
+                                        magn_map.insert(ts, itm);
+                                        timestamp.2 += reading_duration.2.unwrap();
+                                    } else if group == &GroupId::GravityVector {
+                                        let ts = (timestamp.3 * 1000.0f64).round() as i64;
+                                        let o = gpmf_gravity_vector_export([itm.x, itm.y, itm.z]);
+                                        grav_map.insert(
+                                            ts,
+                                            Vector3 {
+                                                x: o[0],
+                                                y: o[1],
+                                                z: o[2],
+                                            },
+                                        );
+                                        timestamp.3 += reading_duration.3.unwrap();
+                                    }
                                 }
                             },
                             TagValue::Vec_TimeVector3_f64(arr) => {
@@ -553,10 +649,25 @@ pub fn normalized_imu_interpolated(input: &crate::Input, orientation: Option<Str
 
                                     let timestamp_us = (timestamp_ms * 1000.0).round() as i64;
 
-                                    let itm = v.clone().into_scaled(&raw2unit, &unit2deg).orient(io);
-                                         if group == &GroupId::Gyroscope     { gyro_map.insert(timestamp_us, itm);  gyro_timestamps.insert(timestamp_us); }
-                                    else if group == &GroupId::Accelerometer { accl_map.insert(timestamp_us, itm); }
-                                    else if group == &GroupId::Magnetometer  { magn_map.insert(timestamp_us, itm); }
+                                    let itm = v.clone().into_scaled(&raw2unit, &unit_scale).orient(io);
+                                    if group == &GroupId::Gyroscope {
+                                        gyro_map.insert(timestamp_us, itm);
+                                        gyro_timestamps.insert(timestamp_us);
+                                    } else if group == &GroupId::Accelerometer {
+                                        accl_map.insert(timestamp_us, itm);
+                                    } else if group == &GroupId::Magnetometer {
+                                        magn_map.insert(timestamp_us, itm);
+                                    } else if group == &GroupId::GravityVector {
+                                        let o = gpmf_gravity_vector_export([itm.x, itm.y, itm.z]);
+                                        grav_map.insert(
+                                            timestamp_us,
+                                            Vector3 {
+                                                x: o[0],
+                                                y: o[1],
+                                                z: o[2],
+                                            },
+                                        );
+                                    }
                                 }
                             },
                             _ => ()
@@ -592,7 +703,8 @@ pub fn normalized_imu_interpolated(input: &crate::Input, orientation: Option<Str
             timestamp_ms: *x as f64 / 1000.0,
             gyro: get_at_timestamp(*x, &gyro_map),
             accl: get_at_timestamp(*x, &accl_map),
-            magn: get_at_timestamp(*x, &magn_map)
+            magn: get_at_timestamp(*x, &magn_map),
+            grav: get_at_timestamp(*x, &grav_map),
         });
     }
 
@@ -646,6 +758,46 @@ pub fn find_from_to(buffer: &[u8], from: &[u8], to: &[u8]) -> Option<String> {
     let pos = memmem::find(buffer, from)?;
     let end = memmem::find(&buffer[pos+from.len()..], to)?;
     Some(String::from_utf8_lossy(&buffer[pos..pos+from.len()+end+to.len()]).into())
+}
+
+/// Read GPMF `GPSF` (fix) and `GPSP` (DOP × 100) from any DEVC group in this payload.
+pub fn gpmf_gps_fix_precision(grouped: &GroupedTagMap) -> (i32, i32) {
+    let mut fix = 3i32;
+    let mut precision = 0i32;
+    for (_g, omap) in grouped.iter() {
+        for (_tid, desc) in omap.iter() {
+            match desc.description.as_str() {
+                "GPSF" => {
+                    if let Some(v) = tag_value_scalar_i32(&desc.value) {
+                        fix = v;
+                    }
+                }
+                "GPSP" => {
+                    if let Some(v) = tag_value_scalar_i32(&desc.value) {
+                        precision = v;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    (fix, precision)
+}
+
+fn tag_value_scalar_i32(v: &TagValue) -> Option<i32> {
+    match v {
+        TagValue::i8(t) => Some(*t.get() as i32),
+        TagValue::u8(t) => Some(*t.get() as i32),
+        TagValue::i16(t) => Some(*t.get() as i32),
+        TagValue::u16(t) => Some(*t.get() as i32),
+        TagValue::i32(t) => Some(*t.get()),
+        TagValue::u32(t) => Some(*t.get() as i32),
+        TagValue::i64(t) => Some(*t.get() as i32),
+        TagValue::u64(t) => Some(*t.get() as i32),
+        TagValue::f32(t) => Some(*t.get() as i32),
+        TagValue::f64(t) => Some(*t.get() as i32),
+        _ => None,
+    }
 }
 
 pub fn insert_tag(map: &mut GroupedTagMap, tag: TagDescription, options: &crate::InputOptions) {
