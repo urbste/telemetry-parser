@@ -26,6 +26,15 @@ cd android && ./gradlew assembleRelease   # or: ./gradlew assembleDebug
 
 Artifacts: `android/build/outputs/aar/telemetry-android-release.aar` and `telemetry-android-debug.aar`.
 
+## CI builds (no local Android SDK required)
+
+GitHub Actions builds the release AAR on every push/PR to `master` or `main` that touches Rust or Android packaging files. You can also run it manually from **Actions → Android AAR → Run workflow** (optional `abis` input for multi-ABI builds).
+
+After a successful run, download **telemetry-android-release.aar** from the workflow run’s **Artifacts** section.
+
+- Regular CI / PR builds: **arm64-v8a** only (faster).
+- Version tags (`v*`): all common ABIs (`arm64-v8a`, `armeabi-v7a`, `x86_64`, `x86`) and the AAR is attached to the GitHub Release.
+
 ## Testing
 
 A runnable sample app lives at `../sample-app` in this repo:

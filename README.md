@@ -72,6 +72,10 @@ Rust JNI + Kotlin live under [`android/`](android/). The Gradle task `buildRustL
 
 Equivalent Gradle properties: `-PrustAbis=...` and `-PrustProfile=release` or `-PrustProfile=android-dev`.
 
+**CI (no local Android SDK)**
+
+GitHub Actions (`.github/workflows/android.yml`) builds the release AAR on pushes/PRs to `master`/`main` and on demand. Download **telemetry-android-release.aar** from the workflow run artifacts. Tag releases include all common ABIs.
+
 **Notes**
 
 - `buildRustLib` declares inputs/outputs so Gradle skips Rust when nothing changed (`UP-TO-DATE`).
