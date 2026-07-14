@@ -1,8 +1,18 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 // Copyright © 2021-2022 Adrian <adrian.eddy at gmail>
 
+#[cfg(any(
+    target_os = "android",
+    target_os = "ios",
+    target_os = "macos"
+))]
+mod mobile;
+
 #[cfg(target_os = "android")]
 mod android;
+
+#[cfg(any(target_os = "ios", target_os = "macos"))]
+mod ios;
 
 mod sony;
 mod gopro;

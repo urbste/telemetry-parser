@@ -3,7 +3,7 @@ name = "telemetry-parser"
 version = "0.3.0"
 
 [lib]
-crate-type = ["lib", "cdylib"]
+crate-type = ["lib", "cdylib", "staticlib"]
 authors = ["Adrian <adrian.eddy@gmail.com>"]
 edition = "2024"
 license = "MIT OR Apache-2.0"
@@ -50,6 +50,14 @@ opt-level = 3
 
 # Fast iteration for Android native builds (use with -PrustProfile=android-dev)
 [profile.android-dev]
+inherits = "release"
+lto = false
+codegen-units = 16
+opt-level = 1
+debug = false
+
+# Fast iteration for iOS native builds (use with CARGO_PROFILE=ios-dev)
+[profile.ios-dev]
 inherits = "release"
 lto = false
 codegen-units = 16

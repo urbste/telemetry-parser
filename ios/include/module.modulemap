@@ -1,0 +1,4 @@
+module TelemetryParserFFI {
+    header "telemetry_parser.h"
+    export *
+}

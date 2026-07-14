@@ -1,0 +1,66 @@
+name: iOS XCFramework
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'build.rs'
+      - 'build-ios.sh'
+      - 'ios/**'
+      - '.cargo/**'
+      - '.github/workflows/ios.yml'
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [master, main]
+    paths:
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'build.rs'
+      - 'build-ios.sh'
+      - 'ios/**'
+      - '.cargo/**'
+      - '.github/workflows/ios.yml'
+  workflow_dispatch:
+
+jobs:
+  build-xcframework:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build iOS XCFramework
+        run: ./build-ios.sh
+
+      - name: Upload XCFramework artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TelemetryParser.xcframework
+          path: ios/build/TelemetryParser.xcframework
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Zip XCFramework for release
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          cd ios/build
+          zip -r TelemetryParser.xcframework.zip TelemetryParser.xcframework
+
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ios/build/TelemetryParser.xcframework.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

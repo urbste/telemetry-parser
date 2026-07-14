@@ -77,6 +77,41 @@ Equivalent Gradle properties: `-PrustAbis=...` and `-PrustProfile=release` or `-
 - `buildRustLib` declares inputs/outputs so Gradle skips Rust when nothing changed (`UP-TO-DATE`).
 - [gradle.properties](gradle.properties) enables parallel builds and build caching. Configuration cache is commented out by default (AGP 8.2 + JDK 21 often hits `JdkImageTransform` issues with it on); you can re-enable when using JDK 17 or a newer AGP.
 
+## iOS library (XCFramework + Swift Package)
+
+Rust static library + Swift wrapper live under [`ios/`](ios/). Run `./build-ios.sh` on **macOS** to produce `ios/build/TelemetryParser.xcframework`, then consume via Swift Package Manager.
+
+**Prerequisites**
+
+- macOS with **Xcode** and Command Line Tools
+- [Rust / rustup](https://rustup.rs/)
+- iOS Rust targets (installed automatically): `aarch64-apple-ios`, `aarch64-apple-ios-sim`
+
+**Commands**
+
+- Default (device + Apple Silicon simulator, release profile):  
+  `./build-ios.sh`  
+  Output: `ios/build/TelemetryParser.xcframework`
+- Debug / unoptimized native build:  
+  `./build-ios.sh debug`
+- Fast iteration (lighter Rust profile `ios-dev` from [`Cargo.toml`](Cargo.toml)):  
+  `CARGO_PROFILE=ios-dev ./build-ios.sh`
+- Intel simulator slice (optional):  
+  `INCLUDE_X86_SIM=1 ./build-ios.sh`
+
+**SwiftPM**
+
+Add a dependency on the `ios/` package (after building or downloading the XCFramework). See [`ios/README.md`](ios/README.md) and the sample in [`ios-sample/`](ios-sample/).
+
+**CI (no local Mac)**
+
+GitHub Actions (`.github/workflows/ios.yml`) builds the XCFramework on pushes/PRs to `master`/`main` and on demand. Download the artifact from the workflow run, unzip into `ios/build/TelemetryParser.xcframework`.
+
+**Notes**
+
+- The native API needs a **filesystem path**. On iOS, copy Photos or document-picker files to a temp path before `open(path:)`.
+- Low-level C bindings: [`ios/include/telemetry_parser.h`](ios/include/telemetry_parser.h)
+
 <br>
 
 #### License
