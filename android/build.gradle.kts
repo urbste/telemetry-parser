@@ -19,6 +19,11 @@ android {
     compileSdk = 34
     ndkVersion = "26.3.11579264"
 
+    // AAR output: telemetry-android-debug.aar / telemetry-android-release.aar
+    base {
+        archivesName.set("telemetry-android")
+    }
+
     defaultConfig {
         minSdk = 21
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

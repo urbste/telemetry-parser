@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "telemetry-parser"
 include(":android")
+include(":sample-app")

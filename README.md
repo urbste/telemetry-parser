@@ -49,7 +49,7 @@ Details in [bin/python-module](https://github.com/AdrianEddy/telemetry-parser/tr
 
 ## Android library (AAR)
 
-Rust JNI + Kotlin live under [`android/`](android/). The Gradle task `buildRustLib` runs **cargo-ndk** before packaging; you do not need to run `cargo ndk` manually when using `./build-android.sh` or `./gradlew :android:assembleRelease`.
+Rust JNI + Kotlin live under [`android/`](android/). The Gradle task `buildRustLib` runs **cargo-ndk** before packaging; you do not need to run `cargo ndk` manually when using `./build-android.sh` or `./gradlew :android:assembleRelease` / `:android:assembleDebug`.
 
 **Prerequisites**
 
@@ -63,6 +63,8 @@ Rust JNI + Kotlin live under [`android/`](android/). The Gradle task `buildRustL
 - Default (fast): single ABI **arm64-v8a**, Cargo **release** profile  
   `./build-android.sh`  
   Output: `android/build/outputs/aar/telemetry-android-release.aar`
+- Debug **library** AAR (Kotlin/debug packaging; native .so still follows `CARGO_PROFILE` unless you change it):  
+  `./build-android.sh debug` → `telemetry-android-debug.aar`
 - Fast iteration (lighter Rust profile `android-dev` from [`Cargo.toml`](Cargo.toml)):  
   `ABIS=arm64-v8a CARGO_PROFILE=android-dev ./build-android.sh`
 - All common ABIs (slower; matches many emulators + 32-bit):  

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Telemetry Parser Sample</string>
+    <string name="pick_video">Pick video</string>
+</resources>

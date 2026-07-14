@@ -441,7 +441,7 @@ mod implementation {
                 for (i, pt) in data.gps_points.iter().enumerate() {
                     let obj = env.new_object(
                         jni_str!("io/github/telemetryparser/model/GpsPoint"),
-                        jni_sig!("(DDDDDIJII)V"),
+                        jni_sig!("(DDDDDJII)V"),
                         &[
                             JValue::Double(pt.latitude),
                             JValue::Double(pt.longitude),
