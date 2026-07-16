@@ -54,12 +54,12 @@ mod implementation {
     ) -> jobject {
         unowned_env
             .with_env(|env| -> Result<jobject, jni::errors::Error> {
-                mobile::with_handle(handle as u64, |data| {
+                Ok(mobile::with_handle(handle as u64, |data| {
                     env.new_string(&data.camera_type)
                         .map(|s| s.into_raw())
                         .unwrap_or(std::ptr::null_mut())
                 })
-                .unwrap_or(std::ptr::null_mut())
+                .unwrap_or(std::ptr::null_mut()))
             })
             .resolve::<jni::errors::ThrowRuntimeExAndDefault>()
     }
@@ -86,7 +86,7 @@ mod implementation {
     ) -> jobject {
         unowned_env
             .with_env(|env| -> Result<jobject, jni::errors::Error> {
-                mobile::with_handle(handle as u64, |data| {
+                Ok(mobile::with_handle(handle as u64, |data| {
                     if let Some(info) = data.video_info_json() {
                         env.new_object(
                             jni_str!("io/github/telemetryparser/model/VideoInfo"),
@@ -103,7 +103,7 @@ mod implementation {
                         std::ptr::null_mut()
                     }
                 })
-                .unwrap_or(std::ptr::null_mut())
+                .unwrap_or(std::ptr::null_mut()))
             })
             .resolve::<jni::errors::ThrowRuntimeExAndDefault>()
     }
@@ -160,7 +160,7 @@ mod implementation {
     ) -> jobject {
         unowned_env
             .with_env(|env| -> Result<jobject, jni::errors::Error> {
-                mobile::with_handle(handle as u64, |data| {
+                Ok(mobile::with_handle(handle as u64, |data| {
                     if let Some(ref js) = data.lens_json {
                         env.new_string(js)
                             .map(|s| s.into_raw())
@@ -169,7 +169,7 @@ mod implementation {
                         std::ptr::null_mut()
                     }
                 })
-                .unwrap_or(std::ptr::null_mut())
+                .unwrap_or(std::ptr::null_mut()))
             })
             .resolve::<jni::errors::ThrowRuntimeExAndDefault>()
     }
@@ -224,7 +224,10 @@ mod implementation {
         result
     }
 
-    fn gps_point_to_jobject(env: &mut Env<'_>, pt: &GpsPoint) -> Result<JObject<'_>, jni::errors::Error> {
+    fn gps_point_to_jobject<'local>(
+        env: &mut Env<'local>,
+        pt: &GpsPoint,
+    ) -> Result<JObject<'local>, jni::errors::Error> {
         env.new_object(
             jni_str!("io/github/telemetryparser/model/GpsPoint"),
             jni_sig!("(DDDDDJII)V"),
