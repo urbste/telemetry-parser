@@ -8,8 +8,11 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use serde::Serialize;
 
+pub use crate::frame_rate::VideoInfoJson;
+
 use crate::filesystem;
 use crate::gpmf_lens;
+use crate::gpmf_recording;
 use crate::tags_impl::*;
 use crate::util::{self, IMUData, VideoMetadata};
 use crate::InputOptions;
@@ -49,23 +52,15 @@ pub struct OrientationSampleJson {
     pub z: f64,
 }
 
-#[derive(Serialize)]
-pub struct VideoInfoJson {
-    #[serde(rename = "frameCount")]
-    pub frame_count: i32,
-    #[serde(rename = "fpsNumerator")]
-    pub fps_numerator: i32,
-    #[serde(rename = "fpsDenominator")]
-    pub fps_denominator: i32,
-}
-
 pub struct ParsedData {
     pub camera_type: String,
     pub duration_s: f64,
-    pub video_info: Option<(usize, f64)>,
+    pub video_info: Option<(f64, f64)>,
     pub gps_points: Vec<GpsPoint>,
     pub imu_data: Vec<IMUData>,
     pub lens_json: Option<String>,
+    pub recording_json: Option<String>,
+    pub camera_model: Option<String>,
     pub cori: Vec<(i64, crate::tags_impl::Quaternion<f64>)>,
     pub iori: Vec<(i64, crate::tags_impl::Quaternion<f64>)>,
     pub orientation_combined: Vec<(i64, crate::tags_impl::Quaternion<f64>)>,
@@ -73,19 +68,8 @@ pub struct ParsedData {
 
 impl ParsedData {
     pub fn video_info_json(&self) -> Option<VideoInfoJson> {
-        self.video_info.map(|(frame_count, fps)| {
-            let num = fps.round() as i32;
-            let den = if (fps - fps.floor()).abs() < 0.01 {
-                1
-            } else {
-                1001
-            };
-            VideoInfoJson {
-                frame_count: frame_count as i32,
-                fps_numerator: num,
-                fps_denominator: den,
-            }
-        })
+        self.video_info
+            .and_then(|(duration_s, fps)| VideoInfoJson::from_duration(duration_s, fps))
     }
 
     pub fn imu_samples_json(
@@ -239,6 +223,9 @@ pub fn parse_file(path: &str) -> Result<ParsedData, String> {
     let imu_data = util::normalized_imu(&input, None).unwrap_or_default();
 
     let lens_json = gpmf_lens::extract_lens(&input).and_then(|l| serde_json::to_string(&l).ok());
+    let recording_json =
+        gpmf_recording::extract_recording(&input).and_then(|r| serde_json::to_string(&r).ok());
+    let camera_model = input.camera_model().cloned();
 
     let (cori, iori, orientation_combined) = input
         .gopro_orientation_streams_ns()
@@ -260,8 +247,7 @@ pub fn parse_file(path: &str) -> Result<ParsedData, String> {
             }
         }
         let info = if md.fps > 0.0 {
-            let frame_count = (md.duration_s * md.fps).round() as usize;
-            Some((frame_count, md.fps))
+            Some((md.duration_s, md.fps))
         } else {
             None
         };
@@ -275,6 +261,8 @@ pub fn parse_file(path: &str) -> Result<ParsedData, String> {
         gps_points,
         imu_data,
         lens_json,
+        recording_json,
+        camera_model,
         cori,
         iori,
         orientation_combined,

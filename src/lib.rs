@@ -42,6 +42,8 @@ pub mod tags_impl;
 pub mod util;
 pub mod filesystem;
 pub mod gpmf_lens;
+pub mod gpmf_recording;
+pub mod frame_rate;
 
 use std::io::*;
 use std::sync::{ Arc, atomic::AtomicBool };

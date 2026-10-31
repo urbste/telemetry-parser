@@ -3,7 +3,7 @@
 
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 mod implementation {
-    use std::ffi::{c_char, CStr, CString};
+    use std::ffi::{CStr, CString, c_char};
     use std::sync::Mutex;
 
     use crate::mobile;
@@ -22,10 +22,26 @@ mod implementation {
         }
     }
 
+    fn with_handle<T, F>(handle: u64, f: F) -> Option<T>
+    where
+        F: FnOnce(&mobile::ParsedData) -> T,
+    {
+        clear_last_error();
+        let result = mobile::with_handle(handle, f);
+        if result.is_none() {
+            set_last_error(format!("Invalid or closed parser handle: {handle}"));
+        }
+        result
+    }
+
     fn to_c_string(value: &str) -> *mut c_char {
-        CString::new(value)
-            .map(|s| s.into_raw())
-            .unwrap_or(std::ptr::null_mut())
+        match CString::new(value) {
+            Ok(value) => value.into_raw(),
+            Err(error) => {
+                set_last_error(format!("String contains an interior NUL byte: {error}"));
+                std::ptr::null_mut()
+            }
+        }
     }
 
     fn json_to_c_string<T: serde::Serialize>(value: &T) -> *mut c_char {
@@ -90,18 +106,17 @@ mod implementation {
 
     #[unsafe(no_mangle)]
     pub extern "C" fn telemetry_parser_get_camera_type(handle: u64) -> *mut c_char {
-        mobile::with_handle(handle, |data| to_c_string(&data.camera_type))
-            .unwrap_or(std::ptr::null_mut())
+        with_handle(handle, |data| to_c_string(&data.camera_type)).unwrap_or(std::ptr::null_mut())
     }
 
     #[unsafe(no_mangle)]
     pub extern "C" fn telemetry_parser_get_duration(handle: u64) -> f32 {
-        mobile::with_handle(handle, |data| data.duration_s as f32).unwrap_or(0.0)
+        with_handle(handle, |data| data.duration_s as f32).unwrap_or(0.0)
     }
 
     #[unsafe(no_mangle)]
     pub extern "C" fn telemetry_parser_get_video_info_json(handle: u64) -> *mut c_char {
-        mobile::with_handle(handle, |data| {
+        with_handle(handle, |data| {
             data.video_info_json()
                 .map(|info| json_to_c_string(&info))
                 .unwrap_or(std::ptr::null_mut())
@@ -110,8 +125,30 @@ mod implementation {
     }
 
     #[unsafe(no_mangle)]
+    pub extern "C" fn telemetry_parser_get_recording_metadata_json(handle: u64) -> *mut c_char {
+        with_handle(handle, |data| {
+            data.recording_json
+                .as_ref()
+                .map(|json| to_c_string(json))
+                .unwrap_or(std::ptr::null_mut())
+        })
+        .unwrap_or(std::ptr::null_mut())
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn telemetry_parser_get_camera_model(handle: u64) -> *mut c_char {
+        with_handle(handle, |data| {
+            data.camera_model
+                .as_ref()
+                .map(|model| to_c_string(model))
+                .unwrap_or(std::ptr::null_mut())
+        })
+        .unwrap_or(std::ptr::null_mut())
+    }
+
+    #[unsafe(no_mangle)]
     pub extern "C" fn telemetry_parser_get_lens_metadata_json(handle: u64) -> *mut c_char {
-        mobile::with_handle(handle, |data| {
+        with_handle(handle, |data| {
             data.lens_json
                 .as_ref()
                 .map(|s| to_c_string(s))
@@ -122,13 +159,13 @@ mod implementation {
 
     #[unsafe(no_mangle)]
     pub extern "C" fn telemetry_parser_get_gps_json(handle: u64) -> *mut c_char {
-        mobile::with_handle(handle, |data| json_to_c_string(&data.gps_points))
+        with_handle(handle, |data| json_to_c_string(&data.gps_points))
             .unwrap_or(std::ptr::null_mut())
     }
 
     #[unsafe(no_mangle)]
     pub extern "C" fn telemetry_parser_get_accelerometer_json(handle: u64) -> *mut c_char {
-        mobile::with_handle(handle, |data| {
+        with_handle(handle, |data| {
             json_to_c_string(&data.imu_samples_json(|d| d.accl))
         })
         .unwrap_or(std::ptr::null_mut())
@@ -136,19 +173,23 @@ mod implementation {
 
     #[unsafe(no_mangle)]
     pub extern "C" fn telemetry_parser_get_gyroscope_json(handle: u64) -> *mut c_char {
-        mobile::with_handle(handle, |data| json_to_c_string(&data.imu_samples_json(|d| d.gyro)))
-            .unwrap_or(std::ptr::null_mut())
+        with_handle(handle, |data| {
+            json_to_c_string(&data.imu_samples_json(|d| d.gyro))
+        })
+        .unwrap_or(std::ptr::null_mut())
     }
 
     #[unsafe(no_mangle)]
     pub extern "C" fn telemetry_parser_get_gravity_json(handle: u64) -> *mut c_char {
-        mobile::with_handle(handle, |data| json_to_c_string(&data.imu_samples_json(|d| d.grav)))
-            .unwrap_or(std::ptr::null_mut())
+        with_handle(handle, |data| {
+            json_to_c_string(&data.imu_samples_json(|d| d.grav))
+        })
+        .unwrap_or(std::ptr::null_mut())
     }
 
     #[unsafe(no_mangle)]
     pub extern "C" fn telemetry_parser_get_camera_orientation_json(handle: u64) -> *mut c_char {
-        mobile::with_handle(handle, |data| {
+        with_handle(handle, |data| {
             json_to_c_string(&data.orientation_samples_json(&data.cori))
         })
         .unwrap_or(std::ptr::null_mut())
@@ -156,7 +197,7 @@ mod implementation {
 
     #[unsafe(no_mangle)]
     pub extern "C" fn telemetry_parser_get_image_orientation_json(handle: u64) -> *mut c_char {
-        mobile::with_handle(handle, |data| {
+        with_handle(handle, |data| {
             json_to_c_string(&data.orientation_samples_json(&data.iori))
         })
         .unwrap_or(std::ptr::null_mut())
@@ -164,7 +205,7 @@ mod implementation {
 
     #[unsafe(no_mangle)]
     pub extern "C" fn telemetry_parser_get_orientation_combined_json(handle: u64) -> *mut c_char {
-        mobile::with_handle(handle, |data| {
+        with_handle(handle, |data| {
             json_to_c_string(&data.orientation_samples_json(&data.orientation_combined))
         })
         .unwrap_or(std::ptr::null_mut())

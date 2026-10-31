@@ -62,6 +62,20 @@ class TelemetryParser : Closeable {
     }
 
     /**
+     * Recording settings JSON when present (VFOV, ZFOV, EISA, firmware, …), or null.
+     */
+    fun getRecordingMetadataJson(): String? {
+        checkOpen()
+        return nativeGetRecordingMetadataJson(nativeHandle)
+    }
+
+    /** Camera model string when known (e.g. HERO9 Black), or null. */
+    fun getCameraModel(): String? {
+        checkOpen()
+        return nativeGetCameraModel(nativeHandle)
+    }
+
+    /**
      * DVID / FOVL lens JSON when present (same structure as extract-metadata `lens` object), or null.
      */
     fun getLensMetadataJson(): String? {
@@ -118,6 +132,8 @@ class TelemetryParser : Closeable {
     private external fun nativeGetCameraType(handle: Long): String?
     private external fun nativeGetDuration(handle: Long): Float
     private external fun nativeGetVideoInfo(handle: Long): VideoInfo?
+    private external fun nativeGetRecordingMetadataJson(handle: Long): String?
+    private external fun nativeGetCameraModel(handle: Long): String?
     private external fun nativeGetLensMetadataJson(handle: Long): String?
     private external fun nativeGetGpsData(handle: Long): Array<GpsPoint>?
     private external fun nativeGetAccelerometerData(handle: Long): Array<SensorSample>?

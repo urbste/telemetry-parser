@@ -7,8 +7,8 @@ Swift Package wrapping the Rust telemetry-parser core for iOS (and macOS for loc
 ## Requirements
 
 - macOS with **Xcode** and Command Line Tools
-- [Rust / rustup](https://rustup.rs/)
-- iOS Rust targets (installed automatically by `build-ios.sh`):
+- Rust 1.94.0 through [rustup](https://rustup.rs/) (pinned by `rust-toolchain.toml`)
+- iOS Rust targets (install before running `build-ios.sh`):
   - `aarch64-apple-ios` (device)
   - `aarch64-apple-ios-sim` (Apple Silicon simulator)
   - optional: `x86_64-apple-ios` (Intel simulator, set `INCLUDE_X86_SIM=1`)

@@ -153,6 +153,50 @@ mod implementation {
     }
 
     #[unsafe(no_mangle)]
+    pub extern "system" fn Java_io_github_telemetryparser_TelemetryParser_nativeGetRecordingMetadataJson(
+        mut unowned_env: EnvUnowned<'_>,
+        _: JObject,
+        handle: jlong,
+    ) -> jobject {
+        unowned_env
+            .with_env(|env| -> Result<jobject, jni::errors::Error> {
+                Ok(mobile::with_handle(handle as u64, |data| {
+                    if let Some(ref js) = data.recording_json {
+                        env.new_string(js)
+                            .map(|s| s.into_raw())
+                            .unwrap_or(std::ptr::null_mut())
+                    } else {
+                        std::ptr::null_mut()
+                    }
+                })
+                .unwrap_or(std::ptr::null_mut()))
+            })
+            .resolve::<jni::errors::ThrowRuntimeExAndDefault>()
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_io_github_telemetryparser_TelemetryParser_nativeGetCameraModel(
+        mut unowned_env: EnvUnowned<'_>,
+        _: JObject,
+        handle: jlong,
+    ) -> jobject {
+        unowned_env
+            .with_env(|env| -> Result<jobject, jni::errors::Error> {
+                Ok(mobile::with_handle(handle as u64, |data| {
+                    if let Some(ref model) = data.camera_model {
+                        env.new_string(model)
+                            .map(|s| s.into_raw())
+                            .unwrap_or(std::ptr::null_mut())
+                    } else {
+                        std::ptr::null_mut()
+                    }
+                })
+                .unwrap_or(std::ptr::null_mut()))
+            })
+            .resolve::<jni::errors::ThrowRuntimeExAndDefault>()
+    }
+
+    #[unsafe(no_mangle)]
     pub extern "system" fn Java_io_github_telemetryparser_TelemetryParser_nativeGetLensMetadataJson(
         mut unowned_env: EnvUnowned<'_>,
         _: JObject,

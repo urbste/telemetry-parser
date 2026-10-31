@@ -28,6 +28,12 @@ float telemetry_parser_get_duration(uint64_t handle);
 /// JSON object with frameCount, fpsNumerator, fpsDenominator; null if unavailable.
 char *telemetry_parser_get_video_info_json(uint64_t handle);
 
+/// Recording metadata JSON when present; null if unavailable or on failure (check last_error).
+char *telemetry_parser_get_recording_metadata_json(uint64_t handle);
+
+/// Camera model string when present; null if unavailable or on failure (check last_error).
+char *telemetry_parser_get_camera_model(uint64_t handle);
+
 /// DVID/FOVL lens JSON when present; null otherwise.
 char *telemetry_parser_get_lens_metadata_json(uint64_t handle);
 
