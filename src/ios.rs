@@ -166,7 +166,7 @@ mod implementation {
     #[unsafe(no_mangle)]
     pub extern "C" fn telemetry_parser_get_accelerometer_json(handle: u64) -> *mut c_char {
         with_handle(handle, |data| {
-            json_to_c_string(&data.imu_samples_json(|d| d.accl))
+            json_to_c_string(&data.imu_samples_json(|d| d.accl, |d| d.timestamp_ms))
         })
         .unwrap_or(std::ptr::null_mut())
     }
@@ -174,7 +174,7 @@ mod implementation {
     #[unsafe(no_mangle)]
     pub extern "C" fn telemetry_parser_get_gyroscope_json(handle: u64) -> *mut c_char {
         with_handle(handle, |data| {
-            json_to_c_string(&data.imu_samples_json(|d| d.gyro))
+            json_to_c_string(&data.imu_samples_json(|d| d.gyro, |d| d.timestamp_ms))
         })
         .unwrap_or(std::ptr::null_mut())
     }
@@ -182,7 +182,7 @@ mod implementation {
     #[unsafe(no_mangle)]
     pub extern "C" fn telemetry_parser_get_gravity_json(handle: u64) -> *mut c_char {
         with_handle(handle, |data| {
-            json_to_c_string(&data.imu_samples_json(|d| d.grav))
+            json_to_c_string(&data.imu_samples_json(|d| d.grav, |d| d.grav_time_ms()))
         })
         .unwrap_or(std::ptr::null_mut())
     }

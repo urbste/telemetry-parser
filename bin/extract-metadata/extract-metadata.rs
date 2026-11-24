@@ -92,10 +92,10 @@ fn main() {
     let imu_data = util::normalized_imu(&input, None).unwrap_or_default();
 
     let (accelerometer, accelerometer_timestamps_ns) =
-        triple_stream_from_imu(&imu_data, |d| d.accl);
+        triple_stream_from_imu(&imu_data, |d| d.accl, |d| d.timestamp_ms);
     let (gyroscope, gyroscope_timestamps_ns) =
-        triple_stream_from_imu(&imu_data, |d| d.gyro);
-    let (grav_v, grav_t) = triple_stream_from_imu(&imu_data, |d| d.grav);
+        triple_stream_from_imu(&imu_data, |d| d.gyro, |d| d.timestamp_ms);
+    let (grav_v, grav_t) = triple_stream_from_imu(&imu_data, |d| d.grav, |d| d.grav_time_ms());
     let (gravity, gravity_timestamps_ns) = if grav_v.is_empty() {
         (None, None)
     } else {
@@ -202,16 +202,17 @@ fn main() {
     );
 }
 
-fn triple_stream_from_imu<F>(imu: &[util::IMUData], get: F) -> (Vec<[f64; 3]>, Vec<i64>)
+fn triple_stream_from_imu<F, T>(imu: &[util::IMUData], get: F, time_ms: T) -> (Vec<[f64; 3]>, Vec<i64>)
 where
     F: Fn(&util::IMUData) -> Option<[f64; 3]>,
+    T: Fn(&util::IMUData) -> f64,
 {
     let mut vals = Vec::new();
     let mut timestamps_ns = Vec::new();
     for d in imu {
         if let Some(v) = get(d) {
             vals.push(v);
-            timestamps_ns.push((d.timestamp_ms * 1_000_000.0).round() as i64);
+            timestamps_ns.push((time_ms(d) * 1_000_000.0).round() as i64);
         }
     }
     (vals, timestamps_ns)
@@ -250,6 +251,13 @@ fn extract_gps_series(
     };
 
     let mut running_ts_s = 0.0f64;
+    // GoPro: GPS rows on the fitted video clock (same timing as the mobile bindings).
+    let gps_timing = if input.camera_type() == "GoPro" {
+        telemetry_parser::gopro_stream_timing(samples, &GroupId::GPS)
+    } else {
+        None
+    };
+    let mut gps_index = 0u64;
 
     for info in samples {
         if info.tag_map.is_none() {
@@ -280,7 +288,12 @@ fn extract_gps_series(
                                 // GPS5 5th: typically 3D speed scale 1000 (m/s), same as 2D.
                                 let fifth = row[4] as f64 / 1000.0;
                                 gps_llh.push([lat, lon, alt, speed2d, fifth]);
-                                gps_timestamps_ns.push(running_ts_s * 1_000_000_000.0);
+                                let time_s = match gps_timing {
+                                    Some(t) => t.time_ms(gps_index) / 1000.0,
+                                    None => running_ts_s,
+                                };
+                                gps_index += 1;
+                                gps_timestamps_ns.push(time_s * 1_000_000_000.0);
                                 gps_precision.push(prec_f);
                                 gps_fix.push(fix_f);
                                 running_ts_s += duration_per_point;

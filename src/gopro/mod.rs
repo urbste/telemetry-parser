@@ -14,6 +14,100 @@ use crate::*;
 use klv::KLV;
 use memchr::memmem;
 
+/// Video-clock timing of one GPMF stream: time (ms) of sample `i` is `intercept_ms + i * period_ms`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StreamTiming {
+    pub intercept_ms: f64,
+    pub period_ms: f64,
+}
+
+impl StreamTiming {
+    pub fn time_ms(&self, index: u64) -> f64 {
+        self.intercept_ms + index as f64 * self.period_ms
+    }
+}
+
+/// GoPro "precise" per-stream timing: least-squares fit of payload start time (ms, video clock) against the
+/// cumulative sample count at payload start. `payloads` is `(start_ms, sample_count)` in file order.
+/// Returns `None` when fewer than two non-empty payloads exist or the fit is degenerate.
+pub fn fit_stream_timing(payloads: &[(f64, usize)]) -> Option<StreamTiming> {
+    let mut xs = Vec::with_capacity(payloads.len());
+    let mut ys = Vec::with_capacity(payloads.len());
+    let mut cumulative = 0usize;
+    for &(start_ms, count) in payloads {
+        if count == 0 {
+            continue;
+        }
+        xs.push(cumulative as f64);
+        ys.push(start_ms);
+        cumulative += count;
+    }
+    if xs.len() < 2 {
+        return None;
+    }
+    let n = xs.len() as f64;
+    let mean_x = xs.iter().sum::<f64>() / n;
+    let mean_y = ys.iter().sum::<f64>() / n;
+    let sxx: f64 = xs.iter().map(|x| (x - mean_x) * (x - mean_x)).sum();
+    if sxx <= 0.0 {
+        return None;
+    }
+    let sxy: f64 = xs.iter().zip(&ys).map(|(x, y)| (x - mean_x) * (y - mean_y)).sum();
+    let period_ms = sxy / sxx;
+    if !(period_ms.is_finite() && period_ms > 0.0) {
+        return None;
+    }
+    Some(StreamTiming { intercept_ms: mean_y - period_ms * mean_x, period_ms })
+}
+
+/// Number of samples one GPMF payload carries for a stream (GPS5 rows with at least five values count).
+fn payload_sample_count(map: &TagMap) -> usize {
+    if let Some(v) = map.get_t(TagId::Data) as Option<&Vec<Vector3<i16>>> {
+        return v.len();
+    }
+    if let Some(v) = map.get_t(TagId::Data) as Option<&Vec<Quaternion<i16>>> {
+        return v.len();
+    }
+    if let Some(v) = map.get_t(TagId::Data) as Option<&Vec<Vec<i32>>> {
+        return v.iter().filter(|row| row.len() >= 5).count();
+    }
+    0
+}
+
+/// `(payload start ms, sample count)` for every payload carrying `group_id`, in file order.
+pub fn stream_payloads(samples: &[SampleInfo], group_id: &GroupId) -> Vec<(f64, usize)> {
+    let mut out = Vec::new();
+    for info in samples {
+        let Some(grouped) = info.tag_map.as_ref() else { continue };
+        for (group, map) in grouped {
+            if group == group_id {
+                let count = payload_sample_count(map);
+                if count > 0 {
+                    out.push((info.timestamp_ms, count));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Fitted video-clock timing for one stream, or `None` when the fit is impossible (fewer than two payloads).
+pub fn stream_timing(samples: &[SampleInfo], group_id: &GroupId) -> Option<StreamTiming> {
+    fit_stream_timing(&stream_payloads(samples, group_id))
+}
+
+/// Presentation offset (ms) of the GPMF metadata track: the first edit-list `media_time`.
+/// `create_sample_table` yields media-clock times; the video clock (t=0 = first presented frame) is media - offset.
+pub fn metadata_edit_offset_ms(tracks: &[mp4parse::Track]) -> f64 {
+    let track = tracks
+        .iter()
+        .find(|t| t.track_type == mp4parse::TrackType::Metadata)
+        .or_else(|| tracks.iter().find(|t| t.track_type == mp4parse::TrackType::Unknown));
+    track
+        .and_then(|t| Some(t.media_time?.0 as f64 * 1000.0 / t.timescale?.0 as f64))
+        .unwrap_or(0.0)
+}
+
 #[derive(Default)]
 pub struct GoPro {
     pub model: Option<String>,
@@ -138,6 +232,7 @@ impl GoPro {
             }
         } else {
             let cancel_flag2 = cancel_flag.clone();
+            let first_payload = samples.len();
             let ctx = util::get_metadata_track_samples(stream, size, true, |mut info: SampleInfo, data: &[u8], file_position: u64, _video_md: Option<&VideoMetadata>| {
                 if size > 0 {
                     progress_cb(file_position as f64 / size as f64);
@@ -155,6 +250,11 @@ impl GoPro {
             }, cancel_flag)?;
             if !ctx.tracks.is_empty() {
                 fps = util::get_fps_from_track(&ctx.tracks[0]);
+            }
+            // Payload times become video-clock times (t=0 = first presented frame), so they may start negative.
+            let edit_offset_ms = metadata_edit_offset_ms(&ctx.tracks);
+            for info in samples.iter_mut().skip(first_payload) {
+                info.timestamp_ms -= edit_offset_ms;
             }
         }
         self.process_samples(&mut samples, fps, &options);
@@ -325,6 +425,11 @@ impl GoPro {
         let mut global_ts_cori: f64 = 0.0;
         let mut global_ts_iori: f64 = 0.0;
         let global_increment = fps.map(|x| 1000.0 / x);
+        // Per-stream fitted timing (video clock); falls back to the frame-rate based timeline when a fit is impossible.
+        let cori_timing = stream_timing(samples.as_slice(), &GroupId::CameraOrientation);
+        let iori_timing = stream_timing(samples.as_slice(), &GroupId::ImageOrientation);
+        let mut cori_index = 0u64;
+        let mut iori_index = 0u64;
         for i in 0..samples.len() {
             let info = &samples[i];
             if info.tag_map.is_none() { continue; }
@@ -349,8 +454,19 @@ impl GoPro {
                         let increment = next_timestamp_us.map(|x| (x - timestamp_us) / sample_count).unwrap_or(prev_increment);
                         prev_increment = increment;
                         for v in arr.iter() {
+                            let fitted_ms = if group == &GroupId::CameraOrientation {
+                                let t = cori_timing.map(|t| t.time_ms(cori_index));
+                                cori_index += 1;
+                                t
+                            } else {
+                                let t = iori_timing.map(|t| t.time_ms(iori_index));
+                                iori_index += 1;
+                                t
+                            };
                             let mut ts = timestamp_us - start_timestamp_us.unwrap();
-                            if let Some(global_inc) = global_increment {
+                            if let Some(ms) = fitted_ms {
+                                ts = (ms * 1000.0).round() as i64;
+                            } else if let Some(global_inc) = global_increment {
                                 if group == &GroupId::CameraOrientation {
                                     ts = (global_ts_cori * 1000.0).round() as i64;
                                     global_ts_cori += global_inc;
@@ -477,5 +593,60 @@ impl GoPro {
             else if mtrx[x * 3 + 2] > 0.5 { 'Z' } else if mtrx[x * 3 + 2] < -0.5 { 'z' }
             else { panic!("Invalid MTRX {:?}", mtrx) }
         }).collect()
+    }
+}
+
+#[cfg(test)]
+mod timing_tests {
+    use super::*;
+
+    /// Payloads for a stream whose true sample `i` is at `t0_ms + i * period_ms`: payload `k` starts at the time of
+    /// its first sample and carries `counts[k]` samples (the same mapping GoPro payloads follow).
+    fn synthetic_payloads(t0_ms: f64, period_ms: f64, counts: &[usize]) -> Vec<(f64, usize)> {
+        let mut cumulative = 0usize;
+        counts
+            .iter()
+            .map(|&n| {
+                let start = t0_ms + cumulative as f64 * period_ms;
+                cumulative += n;
+                (start, n)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn recovers_negative_pre_roll_intercept_and_period() {
+        // Edit-list pre-roll of -100 ms: the first payload sits before the first presented frame.
+        let counts = [211, 211, 210, 211, 210, 211, 211, 210];
+        let p = 4.933_463;
+        let t = fit_stream_timing(&synthetic_payloads(-100.0, p, &counts)).expect("fit");
+        assert!((t.intercept_ms + 100.0).abs() < 1e-9, "intercept {}", t.intercept_ms);
+        assert!((t.period_ms - p).abs() < 1e-9, "period {}", t.period_ms);
+        assert!((t.time_ms(0) + 100.0).abs() < 1e-9);
+        assert!((t.time_ms(1000) - (-100.0 + 1000.0 * p)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn zero_start_is_not_forced() {
+        // Regression: the old fallback pinned sample 0 to 0 ms. A stream starting at +25 ms must keep that start.
+        let counts = [26, 26, 25, 26];
+        let t = fit_stream_timing(&synthetic_payloads(25.0, 40.0, &counts)).expect("fit");
+        assert!((t.intercept_ms - 25.0).abs() < 1e-9);
+        assert!((t.period_ms - 40.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn fit_needs_two_non_empty_payloads() {
+        assert_eq!(fit_stream_timing(&[]), None);
+        assert_eq!(fit_stream_timing(&[(0.0, 10)]), None);
+        assert_eq!(fit_stream_timing(&[(0.0, 0), (1040.0, 0), (2080.0, 5)]), None);
+    }
+
+    #[test]
+    fn empty_payloads_are_skipped_and_noisy_starts_still_fit() {
+        // Two payloads of 200 samples at 1000 ms spacing, with an empty payload in between.
+        let t = fit_stream_timing(&[(-100.0, 200), (500.0, 0), (900.0, 200)]).expect("fit");
+        assert!((t.period_ms - 5.0).abs() < 1e-9);
+        assert!((t.intercept_ms + 100.0).abs() < 1e-9);
     }
 }

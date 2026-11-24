@@ -126,7 +126,7 @@ mod implementation {
         handle: jlong,
     ) -> jobjectArray {
         unowned_env
-            .with_env(|env| extract_imu_array(env, handle, |d| d.accl))
+            .with_env(|env| extract_imu_array(env, handle, |d| d.accl, |d| d.timestamp_ms))
             .resolve::<jni::errors::ThrowRuntimeExAndDefault>()
     }
 
@@ -137,7 +137,7 @@ mod implementation {
         handle: jlong,
     ) -> jobjectArray {
         unowned_env
-            .with_env(|env| extract_imu_array(env, handle, |d| d.gyro))
+            .with_env(|env| extract_imu_array(env, handle, |d| d.gyro, |d| d.timestamp_ms))
             .resolve::<jni::errors::ThrowRuntimeExAndDefault>()
     }
 
@@ -148,7 +148,7 @@ mod implementation {
         handle: jlong,
     ) -> jobjectArray {
         unowned_env
-            .with_env(|env| extract_imu_array(env, handle, |d| d.grav))
+            .with_env(|env| extract_imu_array(env, handle, |d| d.grav, |d| d.grav_time_ms()))
             .resolve::<jni::errors::ThrowRuntimeExAndDefault>()
     }
 
@@ -292,6 +292,7 @@ mod implementation {
         env: &mut Env<'_>,
         handle: jlong,
         get_vals: fn(&IMUData) -> Option<[f64; 3]>,
+        get_time_ms: fn(&IMUData) -> f64,
     ) -> Result<jobjectArray, jni::errors::Error> {
         let Some(result) = mobile::with_handle(handle as u64, |data| -> Result<jobjectArray, jni::errors::Error> {
             let filtered: Vec<_> = data
@@ -299,7 +300,7 @@ mod implementation {
                 .iter()
                 .filter_map(|d| {
                     get_vals(d).map(|v| {
-                        let ts_ns = (d.timestamp_ms * 1_000_000.0).round() as i64;
+                        let ts_ns = (get_time_ms(d) * 1_000_000.0).round() as i64;
                         (ts_ns, v)
                     })
                 })

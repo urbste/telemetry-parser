@@ -40,6 +40,7 @@ mod zcam;
 
 pub mod tags_impl;
 pub mod util;
+pub use gopro::{stream_timing as gopro_stream_timing, StreamTiming as GoProStreamTiming};
 pub mod filesystem;
 pub mod gpmf_lens;
 pub mod gpmf_recording;

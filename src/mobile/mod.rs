@@ -75,12 +75,13 @@ impl ParsedData {
     pub fn imu_samples_json(
         &self,
         get_vals: fn(&IMUData) -> Option<[f64; 3]>,
+        get_time_ms: fn(&IMUData) -> f64,
     ) -> Vec<SensorSampleJson> {
         self.imu_data
             .iter()
             .filter_map(|d| {
                 get_vals(d).map(|v| SensorSampleJson {
-                    timestamp_ns: (d.timestamp_ms * 1_000_000.0).round() as i64,
+                    timestamp_ns: (get_time_ms(d) * 1_000_000.0).round() as i64,
                     x: v[0] as f32,
                     y: v[1] as f32,
                     z: v[2] as f32,
@@ -122,6 +123,13 @@ fn extract_gps_points(input: &crate::Input) -> Vec<GpsPoint> {
     };
 
     let mut running_ts = 0.0f64;
+    // GoPro: GPS rows on the fitted video clock; other cameras keep the running duration timeline.
+    let gps_timing = if input.camera_type() == "GoPro" {
+        crate::gopro::stream_timing(samples, &GroupId::GPS)
+    } else {
+        None
+    };
+    let mut gps_index = 0u64;
 
     for info in samples {
         if info.tag_map.is_none() {
@@ -158,12 +166,17 @@ fn extract_gps_points(input: &crate::Input) -> Vec<GpsPoint> {
                         for row in data {
                             if row.len() >= 5 {
                                 let utc_ms = utc_time.unwrap_or(0) as i64;
+                                let timestamp_s = match gps_timing {
+                                    Some(t) => t.time_ms(gps_index) / 1000.0,
+                                    None => running_ts,
+                                };
+                                gps_index += 1;
                                 points.push(GpsPoint {
                                     latitude: row[0] as f64 / 10_000_000.0,
                                     longitude: row[1] as f64 / 10_000_000.0,
                                     altitude: row[2] as f64 / 1000.0,
                                     speed2d: row[3] as f64 / 1000.0,
-                                    timestamp_s: running_ts,
+                                    timestamp_s,
                                     utc_time_ms: utc_ms,
                                     fix: gps_fix,
                                     precision: gps_precision,

@@ -292,6 +292,16 @@ pub struct IMUData {
     pub accl: Option<[f64; 3]>,
     pub magn: Option<[f64; 3]>,
     pub grav: Option<[f64; 3]>,
+    /// GoPro gravity vector sample time (ms, video clock) from its own stream timing. `None` elsewhere.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grav_timestamp_ms: Option<f64>,
+}
+
+impl IMUData {
+    /// Sample time (ms) of the gravity vector: its own GoPro timing when present, else the IMU time.
+    pub fn grav_time_ms(&self) -> f64 {
+        self.grav_timestamp_ms.unwrap_or(self.timestamp_ms)
+    }
 }
 
 /// Scale raw IMU values to SI units: gyro rad/s, accel m/s² (same for gravity vector).
@@ -335,6 +345,22 @@ pub fn normalized_imu(input: &crate::Input, orientation: Option<String>) -> Resu
 
     let mut fix_timestamps = false;
 
+    // GoPro: each stream gets its own fitted video-clock timing (see gopro::stream_timing).
+    let is_gopro = input.camera_type() == "GoPro";
+    let gopro_samples: &[SampleInfo] = input.samples.as_deref().unwrap_or(&[]);
+    let (gyro_timing, accl_timing, grav_timing) = if is_gopro {
+        (
+            crate::gopro::stream_timing(gopro_samples, &GroupId::Gyroscope),
+            crate::gopro::stream_timing(gopro_samples, &GroupId::Accelerometer),
+            crate::gopro::stream_timing(gopro_samples, &GroupId::GravityVector),
+        )
+    } else {
+        (None, None, None)
+    };
+    let gopro_imu_timed = gyro_timing.or(accl_timing).is_some();
+    // Samples of each stream consumed so far (index of the next sample within that stream).
+    let (mut cum_gyro, mut cum_accl, mut cum_grav) = (0u64, 0u64, 0u64);
+
     if let Some(ref samples) = input.samples {
         for info in samples {
             if info.tag_map.is_none() { continue; }
@@ -376,12 +402,27 @@ pub fn normalized_imu(input: &crate::Input, orientation: Option<String>) -> Resu
                                 let arr = arr.get();
                                 let reading_duration = info.duration_ms / arr.len() as f64;
                                 fix_timestamps = true;
+                                // GoPro: (stream timing, index of this payload's first sample in the stream)
+                                let gopro_timing = match group {
+                                    GroupId::Gyroscope => gyro_timing.map(|t| (t, cum_gyro)),
+                                    GroupId::Accelerometer => accl_timing.map(|t| (t, cum_accl)),
+                                    GroupId::GravityVector => grav_timing.map(|t| (t, cum_grav)),
+                                    _ => None,
+                                };
 
                                 for (j, v) in arr.iter().enumerate() {
                                     if final_data.len() <= data_index + j {
                                         final_data.resize_with(data_index + j + 1, Default::default);
                                         final_data[data_index + j].timestamp_ms = timestamp;
                                         timestamp += reading_duration;
+                                    }
+                                    if let Some((t, base)) = gopro_timing {
+                                        let ts = t.time_ms(base + j as u64);
+                                        if group == &GroupId::GravityVector {
+                                            final_data[data_index + j].grav_timestamp_ms = Some(ts);
+                                        } else {
+                                            final_data[data_index + j].timestamp_ms = ts;
+                                        }
                                     }
                                     let itm = v.clone().into_scaled(&raw2unit, &unit_scale).orient(io);
                                          if group == &GroupId::Gyroscope     { final_data[data_index + j].gyro = Some([ itm.x, itm.y, itm.z ]); }
@@ -392,6 +433,12 @@ pub fn normalized_imu(input: &crate::Input, orientation: Option<String>) -> Resu
                                             itm.x, itm.y, itm.z,
                                         ]));
                                     }
+                                }
+                                match group {
+                                    GroupId::Gyroscope => cum_gyro += arr.len() as u64,
+                                    GroupId::Accelerometer => cum_accl += arr.len() as u64,
+                                    GroupId::GravityVector => cum_grav += arr.len() as u64,
+                                    _ => {}
                                 }
                             },
                             // Insta360
@@ -427,7 +474,8 @@ pub fn normalized_imu(input: &crate::Input, orientation: Option<String>) -> Resu
         }
     }
 
-    if fix_timestamps && !final_data.is_empty() {
+    // GoPro with fitted stream timing already has its times; the generic fallback would overwrite them.
+    if fix_timestamps && !final_data.is_empty() && !gopro_imu_timed {
         let avg_diff = {
             if input.camera_type() == "GoPro" {
                 crate::gopro::GoPro::get_avg_sample_duration(input.samples.as_ref().unwrap(), &GroupId::Gyroscope)
@@ -705,6 +753,7 @@ pub fn normalized_imu_interpolated(input: &crate::Input, orientation: Option<Str
             accl: get_at_timestamp(*x, &accl_map),
             magn: get_at_timestamp(*x, &magn_map),
             grav: get_at_timestamp(*x, &grav_map),
+            grav_timestamp_ms: None,
         });
     }
 
